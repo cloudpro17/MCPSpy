@@ -7,7 +7,7 @@
 #include "vmlinux.h"
 #include <bpf/bpf_tracing.h>
 
-#define MAX_BUF_SIZE 16 * 1024
+#define MAX_BUF_SIZE 128 * 1024
 #define TASK_COMM_LEN 16
 
 // limit.h indicates 4096 is the max path,
@@ -77,7 +77,7 @@ struct data_event {
     __u8 from_comm[TASK_COMM_LEN]; // Sender comm
     __u32 to_pid;                  // Receiver (reader) PID
     __u8 to_comm[TASK_COMM_LEN];   // Receiver comm
-
+    __u64 file_ptr; // File pointer (struct file*) for session tracking
     __u32 size;     // Actual data size
     __u32 buf_size; // Size of data in buf (may be truncated)
     __u8 buf[MAX_BUF_SIZE];

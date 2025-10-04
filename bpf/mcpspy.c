@@ -131,7 +131,7 @@ int BPF_PROG(exit_vfs_read, struct file *file, const char *buf, size_t count,
     __builtin_memcpy(event->from_comm, info->writer_comm, TASK_COMM_LEN);
     event->to_pid = info->reader_pid;
     __builtin_memcpy(event->to_comm, info->reader_comm, TASK_COMM_LEN);
-
+    event->file_ptr = (__u64)file;
     event->size = ret;
     event->buf_size = ret < MAX_BUF_SIZE ? ret : MAX_BUF_SIZE;
     bpf_probe_read(event->buf, event->buf_size, buf);
@@ -237,7 +237,7 @@ int BPF_PROG(exit_vfs_write, struct file *file, const char *buf, size_t count,
     __builtin_memcpy(event->from_comm, info->writer_comm, TASK_COMM_LEN);
     event->to_pid = info->reader_pid;
     __builtin_memcpy(event->to_comm, info->reader_comm, TASK_COMM_LEN);
-
+    event->file_ptr = (__u64)file;
     event->size = ret;
     event->buf_size = ret < MAX_BUF_SIZE ? ret : MAX_BUF_SIZE;
     bpf_probe_read(event->buf, event->buf_size, buf);

@@ -19,7 +19,8 @@ mcpspy/
 ├── pkg/
 │   ├── ebpf/            # eBPF loading and management
 │   ├── event/           # Event definitions and handling
-|   |── http/            # HTTP transport parsing and analysis
+│   ├── fs/              # Filesystem (stdio) session management and JSON aggregation
+│   ├── http/            # HTTP transport parsing and analysis
 │   ├── mcp/             # MCP protocol parsing and analysis
 │   └── output/          # Output formatting (console, and file output)
 ├── bpf/                 # eBPF C programs

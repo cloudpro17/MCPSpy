@@ -12,6 +12,7 @@ import (
 
 	"github.com/alex-ilgayev/mcpspy/pkg/ebpf"
 	mcpevents "github.com/alex-ilgayev/mcpspy/pkg/event"
+	"github.com/alex-ilgayev/mcpspy/pkg/fs"
 	"github.com/alex-ilgayev/mcpspy/pkg/http"
 	"github.com/alex-ilgayev/mcpspy/pkg/mcp"
 	"github.com/alex-ilgayev/mcpspy/pkg/namespace"
@@ -113,6 +114,10 @@ func run(cmd *cobra.Command, args []string) error {
 	httpManager := http.NewSessionManager()
 	defer httpManager.Close()
 
+	// Manage filesystem (stdio) sessions for JSON aggregation
+	fsManager := fs.NewSessionManager()
+	defer fsManager.Close()
+
 	consoleDisplay.PrintInfo("Loading eBPF programs...")
 	if err := loader.Load(); err != nil {
 		return fmt.Errorf("failed to load eBPF programs: %w", err)
@@ -152,6 +157,50 @@ func run(cmd *cobra.Command, args []string) error {
 		case <-ctx.Done():
 			consoleDisplay.PrintStats(stats)
 			return nil
+		case event, ok := <-fsManager.FSEvents():
+			if !ok {
+				// Channel closed, exit
+				consoleDisplay.PrintStats(stats)
+				return nil
+			}
+
+			switch e := event.(type) {
+			case *mcpevents.FSJsonEvent:
+				logrus.WithFields(logrus.Fields{
+					"type":     e.Type(),
+					"pid":      e.PID,
+					"comm":     e.Comm(),
+					"size":     len(e.Payload),
+					"file_ptr": e.FilePtr,
+				}).Trace("FS JSON event")
+
+				// Parse aggregated JSON payload into MCP messages
+				messages, err := parser.ParseDataStdio(e.Payload, e.EventType, e.FromPID, e.FromCommStr(), e.ToPID, e.ToCommStr())
+				if err != nil {
+					// Ignore this error, it's expected for read events
+					if err.Error() != "no write event found for the parsed read event" {
+						logrus.WithError(err).Debugf("Failed to process %s event", e.Type())
+					}
+					continue
+				}
+
+				// Update statistics
+				for _, msg := range messages {
+					if msg.Method != "" {
+						stats[msg.Method]++
+					}
+				}
+
+				// Display messages to console
+				consoleDisplay.PrintMessages(messages)
+
+				// Also write to file if specified
+				if fileDisplay != nil {
+					fileDisplay.PrintMessages(messages)
+				}
+			default:
+				logrus.WithField("type", event.Type()).Warn("Unknown FS event type")
+			}
 		case event, ok := <-httpManager.HTTPEvents():
 			if !ok {
 				// Channel closed, exit
@@ -243,31 +292,24 @@ func run(cmd *cobra.Command, args []string) error {
 			// Handle different event types
 			switch e := event.(type) {
 			case *mcpevents.FSDataEvent:
-				buf := e.Buf[:e.BufSize]
-				if len(buf) == 0 {
+				if e.BufSize == 0 {
 					continue
 				}
 
-				// Parse raw eBPF event data into MCP messages
-				messages, err := parser.ParseDataStdio(buf, e.EventType, e.FromPID, e.FromCommStr(), e.ToPID, e.ToCommStr())
-				if err != nil {
-					logrus.WithError(err).Debugf("Failed to process %s event", e.Type())
-					continue
-				}
+				logrus.WithFields(logrus.Fields{
+					"type":      e.Type(),
+					"from_pid":  e.FromPID,
+					"from_comm": e.FromCommStr(),
+					"to_pid":    e.ToPID,
+					"to_comm":   e.ToCommStr(),
+					"size":      e.Size,
+					"buf_size":  e.BufSize,
+					"file_ptr":  e.FilePtr,
+				}).Trace("FS data event")
 
-				// Update statistics
-				for _, msg := range messages {
-					if msg.Method != "" {
-						stats[msg.Method]++
-					}
-				}
-
-				// Display messages to console
-				consoleDisplay.PrintMessages(messages)
-
-				// Also write to file if specified
-				if fileDisplay != nil {
-					fileDisplay.PrintMessages(messages)
+				// Send to filesystem session manager for JSON aggregation
+				if err := fsManager.ProcessFSEvent(e); err != nil {
+					logrus.WithError(err).Warnf("Failed to process %s event", e.Type())
 				}
 			case *mcpevents.LibraryEvent:
 				// Handle library events

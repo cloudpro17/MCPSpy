@@ -80,10 +80,16 @@ func TestParseJSONRPC_ValidMessages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Parse with complete kernel correlation
-			msgs, err := parser.ParseDataStdio(tt.data, event.EventTypeFSRead, 100, "writer", 200, "reader")
+			// Simulate write event first
+			_, err := parser.ParseDataStdio(tt.data, event.EventTypeFSJsonWrite, 100, "writer")
 			if err != nil {
-				t.Fatalf("ParseData failed: %v", err)
+				t.Fatalf("ParseData write failed: %v", err)
+			}
+
+			// Then read event
+			msgs, err := parser.ParseDataStdio(tt.data, event.EventTypeFSJsonRead, 200, "reader")
+			if err != nil {
+				t.Fatalf("ParseData read failed: %v", err)
 			}
 
 			if len(msgs) != 1 {
@@ -566,8 +572,13 @@ func TestParseJSONRPC_AllSupportedMethods(t *testing.T) {
 		t.Run(tc.method, func(t *testing.T) {
 			data := []byte(tc.data)
 
-			// Parse with complete kernel correlation
-			msgs, err := parser.ParseDataStdio(data, event.EventTypeFSRead, 100, "writer", 200, "reader")
+			// Write then read
+			_, err := parser.ParseDataStdio(data, event.EventTypeFSJsonWrite, 100, "writer")
+			if err != nil {
+				t.Fatalf("Write failed: %v", err)
+			}
+
+			msgs, err := parser.ParseDataStdio(data, event.EventTypeFSJsonRead, 200, "reader")
 			if err != nil {
 				t.Fatalf("Read failed for method %s: %v", tc.method, err)
 			}
@@ -687,8 +698,14 @@ func TestParseJSONRPC_InvalidMessages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Parse with complete kernel correlation - should fail
-			_, err := parser.ParseDataStdio(tt.data, event.EventTypeFSRead, 100, "writer", 200, "reader")
+			// Write event
+			_, err := parser.ParseDataStdio(tt.data, event.EventTypeFSJsonWrite, 100, "writer")
+			if err != nil {
+				t.Fatalf("Write failed: %v", err)
+			}
+
+			// Read event should fail
+			_, err = parser.ParseDataStdio(tt.data, event.EventTypeFSJsonRead, 200, "reader")
 			if err == nil {
 				t.Errorf("Expected error containing '%s', got nil", tt.expectError)
 				return
@@ -707,10 +724,10 @@ func TestParseData_KernelCorrelation(t *testing.T) {
 
 	data := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"test"}}`)
 
-	// Test normal flow with complete kernel correlation
-	t.Run("Complete kernel correlation", func(t *testing.T) {
-		// Kernel provides complete correlation
-		msgs, err := parser.ParseDataStdio(data, event.EventTypeFSRead, 100, "writer", 200, "reader")
+	// Test normal flow: write then read
+	t.Run("Normal flow", func(t *testing.T) {
+		// Write event
+		writeMsg, err := parser.ParseDataStdio(data, event.EventTypeFSJsonWrite, 100, "writer")
 		if err != nil {
 			t.Fatalf("Parse failed: %v", err)
 		}
@@ -718,7 +735,16 @@ func TestParseData_KernelCorrelation(t *testing.T) {
 			t.Fatalf("Expected 1 message, got %d", len(msgs))
 		}
 
-		msg := msgs[0]
+		// Read event
+		readMsg, err := parser.ParseDataStdio(data, event.EventTypeFSJsonRead, 200, "reader")
+		if err != nil {
+			t.Fatalf("Read failed: %v", err)
+		}
+		if len(readMsg) != 1 {
+			t.Fatalf("Expected 1 message from read event, got %d", len(readMsg))
+		}
+
+		msg := readMsg[0]
 		if msg.FromPID != 100 {
 			t.Errorf("Expected FromPID 100, got %d", msg.FromPID)
 		}
@@ -738,10 +764,9 @@ func TestParseData_KernelCorrelation(t *testing.T) {
 		newParser := NewParser()
 		data2 := []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 
-		// Kernel couldn't find writer (fromPID=0), but parser still processes it
-		msgs, err := newParser.ParseDataStdio(data2, event.EventTypeFSRead, 0, "", 200, "reader")
-		if err != nil {
-			t.Fatalf("Unexpected error: %v", err)
+		_, err := newParser.ParseDataStdio(data2, event.EventTypeFSJsonRead, 200, "reader")
+		if err == nil {
+			t.Error("Expected error for read without write")
 		}
 		if len(msgs) != 1 {
 			t.Errorf("Expected 1 message (processed despite incomplete correlation), got %d", len(msgs))
@@ -780,10 +805,16 @@ func TestParseData_MultipleMessages(t *testing.T) {
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 {"jsonrpc":"2.0","method":"notifications/progress","params":{"value":50}}`)
 
-	// Parse with complete kernel correlation
-	msgs, err := parser.ParseDataStdio(multipleData, event.EventTypeFSRead, 100, "writer", 200, "reader")
+	// Write event
+	_, err := parser.ParseDataStdio(multipleData, event.EventTypeFSJsonWrite, 100, "writer")
 	if err != nil {
-		t.Fatalf("Parse failed: %v", err)
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Read event
+	msgs, err := parser.ParseDataStdio(multipleData, event.EventTypeFSJsonRead, 200, "reader")
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
 	}
 
 	if len(msgs) != 3 {
@@ -1486,7 +1517,8 @@ func TestRequestIDCaching_Stdio(t *testing.T) {
 	t.Run("Request and response with matching ID", func(t *testing.T) {
 		// Send a request: writer(100) -> reader(200)
 		requestData := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"test"}}`)
-		msgs, err := parser.ParseDataStdio(requestData, event.EventTypeFSRead, 100, "writer", 200, "reader")
+		_, _ = parser.ParseDataStdio(requestData, event.EventTypeFSJsonWrite, 100, "writer")
+		msgs, err := parser.ParseDataStdio(requestData, event.EventTypeFSJsonRead, 200, "reader")
 		if err != nil {
 			t.Fatalf("Failed to parse request: %v", err)
 		}
@@ -1496,7 +1528,8 @@ func TestRequestIDCaching_Stdio(t *testing.T) {
 
 		// Send a response: reader(200) -> writer(100)
 		responseData := []byte(`{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}`)
-		msgs, err = parser.ParseDataStdio(responseData, event.EventTypeFSRead, 200, "reader", 100, "writer")
+		_, _ = parser.ParseDataStdio(responseData, event.EventTypeFSJsonWrite, 200, "reader")
+		msgs, err = parser.ParseDataStdio(responseData, event.EventTypeFSJsonRead, 100, "writer")
 		if err != nil {
 			t.Fatalf("Failed to parse response: %v", err)
 		}
@@ -1509,9 +1542,10 @@ func TestRequestIDCaching_Stdio(t *testing.T) {
 	t.Run("Response without matching request ID", func(t *testing.T) {
 		newParser := NewParser()
 		responseData := []byte(`{"jsonrpc":"2.0","id":999,"result":{"status":"ok"}}`)
-		_, err := newParser.ParseDataStdio(responseData, event.EventTypeFSRead, 200, "reader", 100, "writer")
-		if err == nil {
-			t.Error("Expected error for response without matching request ID")
+		_, _ = newParser.ParseDataStdio(responseData, event.EventTypeFSJsonWrite, 200, "reader")
+		msgs, err := newParser.ParseDataStdio(responseData, event.EventTypeFSJsonRead, 100, "writer")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
 		}
 		if !contains(err.Error(), "failed to correlate") {
 			t.Errorf("Expected correlation error, got: %v", err)
@@ -1522,7 +1556,8 @@ func TestRequestIDCaching_Stdio(t *testing.T) {
 	t.Run("Request and response with matching string ID", func(t *testing.T) {
 		newParser := NewParser()
 		requestData := []byte(`{"jsonrpc":"2.0","id":"test-123","method":"initialize","params":{}}`)
-		msgs, err := newParser.ParseDataStdio(requestData, event.EventTypeFSRead, 100, "writer", 200, "reader")
+		_, _ = newParser.ParseDataStdio(requestData, event.EventTypeFSJsonWrite, 100, "writer")
+		msgs, err := newParser.ParseDataStdio(requestData, event.EventTypeFSJsonRead, 200, "reader")
 		if err != nil {
 			t.Fatalf("Failed to parse request: %v", err)
 		}
@@ -1531,7 +1566,8 @@ func TestRequestIDCaching_Stdio(t *testing.T) {
 		}
 
 		responseData := []byte(`{"jsonrpc":"2.0","id":"test-123","result":{"status":"ok"}}`)
-		msgs, err = newParser.ParseDataStdio(responseData, event.EventTypeFSRead, 200, "reader", 100, "writer")
+		_, _ = newParser.ParseDataStdio(responseData, event.EventTypeFSJsonWrite, 200, "reader")
+		msgs, err = newParser.ParseDataStdio(responseData, event.EventTypeFSJsonRead, 100, "writer")
 		if err != nil {
 			t.Fatalf("Failed to parse response: %v", err)
 		}
@@ -1544,7 +1580,8 @@ func TestRequestIDCaching_Stdio(t *testing.T) {
 	t.Run("Notifications are not affected", func(t *testing.T) {
 		newParser := NewParser()
 		notificationData := []byte(`{"jsonrpc":"2.0","method":"notifications/progress","params":{"value":50}}`)
-		msgs, err := newParser.ParseDataStdio(notificationData, event.EventTypeFSRead, 100, "writer", 200, "reader")
+		_, _ = newParser.ParseDataStdio(notificationData, event.EventTypeFSJsonWrite, 100, "writer")
+		msgs, err := newParser.ParseDataStdio(notificationData, event.EventTypeFSJsonRead, 200, "reader")
 		if err != nil {
 			t.Fatalf("Failed to parse notification: %v", err)
 		}
@@ -1559,12 +1596,14 @@ func TestRequestIDCaching_Stdio(t *testing.T) {
 		// Send requests with IDs 1, 2, 3
 		for i := 1; i <= 3; i++ {
 			requestData := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/list"}`, i))
-			_, _ = newParser.ParseDataStdio(requestData, event.EventTypeFSRead, 100, "writer", 200, "reader")
+			_, _ = newParser.ParseDataStdio(requestData, event.EventTypeFSJsonWrite, 100, "writer")
+			_, _ = newParser.ParseDataStdio(requestData, event.EventTypeFSJsonRead, 200, "reader")
 		}
 
 		// Send response with ID 2 (should succeed)
 		responseData := []byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`)
-		msgs, err := newParser.ParseDataStdio(responseData, event.EventTypeFSRead, 200, "reader", 100, "writer")
+		_, _ = newParser.ParseDataStdio(responseData, event.EventTypeFSJsonWrite, 200, "reader")
+		msgs, err := newParser.ParseDataStdio(responseData, event.EventTypeFSJsonRead, 100, "writer")
 		if err != nil {
 			t.Fatalf("Failed to parse response: %v", err)
 		}
@@ -1574,9 +1613,10 @@ func TestRequestIDCaching_Stdio(t *testing.T) {
 
 		// Send response with ID 999 (should fail with correlation error)
 		responseData = []byte(`{"jsonrpc":"2.0","id":999,"result":{"tools":[]}}`)
-		_, err = newParser.ParseDataStdio(responseData, event.EventTypeFSRead, 200, "reader", 100, "writer")
-		if err == nil {
-			t.Error("Expected error for response without matching request ID")
+		_, _ = newParser.ParseDataStdio(responseData, event.EventTypeFSJsonWrite, 200, "reader")
+		msgs, err = newParser.ParseDataStdio(responseData, event.EventTypeFSJsonRead, 100, "writer")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
 		}
 		if !contains(err.Error(), "failed to correlate") {
 			t.Errorf("Expected correlation error, got: %v", err)
@@ -1697,13 +1737,15 @@ func TestRequestIDCaching_MixedIDTypes(t *testing.T) {
 	t.Run("String and int IDs don't collide", func(t *testing.T) {
 		// Send request with numeric ID 1
 		requestData := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
-		_, _ = parser.ParseDataStdio(requestData, event.EventTypeFSRead, 100, "writer", 200, "reader")
+		_, _ = parser.ParseDataStdio(requestData, event.EventTypeFSJsonWrite, 100, "writer")
+		_, _ = parser.ParseDataStdio(requestData, event.EventTypeFSJsonRead, 200, "reader")
 
 		// Try response with string ID "1" (should fail - different type)
 		responseData := []byte(`{"jsonrpc":"2.0","id":"1","result":{"tools":[]}}`)
-		_, err := parser.ParseDataStdio(responseData, event.EventTypeFSRead, 200, "reader", 100, "writer")
-		if err == nil {
-			t.Error("Expected error for response with mismatched ID type")
+		_, _ = parser.ParseDataStdio(responseData, event.EventTypeFSJsonWrite, 200, "reader")
+		msgs, err := parser.ParseDataStdio(responseData, event.EventTypeFSJsonRead, 100, "writer")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
 		}
 		if !contains(err.Error(), "failed to correlate") {
 			t.Errorf("Expected correlation error, got: %v", err)
@@ -1711,7 +1753,8 @@ func TestRequestIDCaching_MixedIDTypes(t *testing.T) {
 
 		// Send response with numeric ID 1 (should succeed)
 		responseData = []byte(`{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}`)
-		msgs, err := parser.ParseDataStdio(responseData, event.EventTypeFSRead, 200, "reader", 100, "writer")
+		_, _ = parser.ParseDataStdio(responseData, event.EventTypeFSJsonWrite, 200, "reader")
+		msgs, err = parser.ParseDataStdio(responseData, event.EventTypeFSJsonRead, 100, "writer")
 		if err != nil {
 			t.Fatalf("Failed to parse response: %v", err)
 		}

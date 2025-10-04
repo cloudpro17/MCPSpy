@@ -23,6 +23,9 @@ const (
 	EventTypeHttpResponse EventType = 101
 	// Received an SSE event through an existing HTTP connection.
 	EventTypeHttpSSE EventType = 102
+	// Complete JSON message from filesystem events
+	EventTypeFSJsonRead  EventType = 103
+	EventTypeFSJsonWrite EventType = 104
 )
 
 type HttpVersion uint8
@@ -64,6 +67,10 @@ func (e EventType) String() string {
 		return "http_response"
 	case EventTypeHttpSSE:
 		return "http_sse"
+	case EventTypeFSJsonRead:
+		return "fs_json_read"
+	case EventTypeFSJsonWrite:
+		return "fs_json_write"
 	default:
 		return "unknown"
 	}
@@ -91,18 +98,22 @@ func (h *EventHeader) Comm() string {
 type FSDataEvent struct {
 	EventHeader
 
-	Inode    uint32    // Inode number for correlation
-	FromPID  uint32    // Sender (writer) PID
-	FromComm [16]uint8 // Sender comm
-	ToPID    uint32    // Receiver (reader) PID
-	ToComm   [16]uint8 // Receiver comm
+	Inode    uint32           // Inode number for correlation
+	FromPID  uint32           // Sender (writer) PID
+	FromComm [16]uint8        // Sender comm
+	ToPID    uint32           // Receiver (reader) PID
+	ToComm   [16]uint8        // Receiver comm
+	FilePtr  uint64           // File pointer (struct file*) for session tracking
+	Size     uint32           // Actual data size
+	BufSize  uint32           // Size of data in buf (may be truncated)
+	Buf      [16 * 1024]uint8 // Data buffer
 
-	Size    uint32           // Actual data size
-	BufSize uint32           // Size of data in buf (may be truncated)
-	Buf     [16 * 1024]uint8 // Data buffer
 }
 
 func (e *FSDataEvent) Type() EventType { return e.EventType }
+func (e *FSDataEvent) Buffer() []byte {
+	return e.Buf[:e.BufSize]
+}
 
 func (e *FSDataEvent) FromCommStr() string {
 	return encoder.BytesToStr(e.FromComm[:])
@@ -135,11 +146,11 @@ func (e *LibraryEvent) MountNamespaceID() uint32 {
 type TlsPayloadEvent struct {
 	EventHeader
 
-	SSLContext  uint64           // SSL context pointer (session identifier)
-	Size        uint32           // Actual data size
-	BufSize     uint32           // Size of data in buf (may be truncated)
-	HttpVersion HttpVersion      // Identified HTTP version
-	Buf         [16 * 1024]uint8 // Data buffer
+	SSLContext  uint64            // SSL context pointer (session identifier)
+	Size        uint32            // Actual data size
+	BufSize     uint32            // Size of data in buf (may be truncated)
+	HttpVersion HttpVersion       // Identified HTTP version
+	Buf         [128 * 1024]uint8 // Data buffer
 }
 
 func (e *TlsPayloadEvent) Type() EventType { return e.EventType }
@@ -203,3 +214,25 @@ type SSEEvent struct {
 }
 
 func (e *SSEEvent) Type() EventType { return e.EventType }
+
+// FSJsonEvent represents a complete JSON message aggregated from filesystem events
+type FSJsonEvent struct {
+	EventHeader
+
+	FromPID  uint32    // Sender (writer) PID
+	FromComm [16]uint8 // Sender comm
+	ToPID    uint32    // Receiver (reader) PID
+	ToComm   [16]uint8 // Receiver comm
+	FilePtr  uint64    // File pointer (struct file*) for session tracking
+	Payload  []byte    // Complete JSON message
+}
+
+func (e *FSJsonEvent) Type() EventType { return e.EventType }
+
+func (e *FSJsonEvent) FromCommStr() string {
+	return encoder.BytesToStr(e.FromComm[:])
+}
+
+func (e *FSJsonEvent) ToCommStr() string {
+	return encoder.BytesToStr(e.ToComm[:])
+}

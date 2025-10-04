@@ -119,13 +119,17 @@ func (s *SessionManager) ProcessTlsEvent(e *event.TlsPayloadEvent) error {
 
 	// Emit request event if complete and not yet emitted
 	if sess.request != nil && sess.request.isComplete && !sess.requestEventEmitted {
-		s.emitHttpRequestEvent(sess)
+		if err := s.emitHttpRequestEvent(sess); err != nil {
+			return err
+		}
 		sess.requestEventEmitted = true
 	}
 
 	// Emit response event if complete and not yet emitted
 	if sess.response != nil && sess.response.isComplete && !sess.responseEventEmitted {
-		s.emitHttpResponseEvent(sess)
+		if err := s.emitHttpResponseEvent(sess); err != nil {
+			return err
+		}
 		sess.responseEventEmitted = true
 	}
 
@@ -147,7 +151,7 @@ func (s *SessionManager) ProcessTlsFreeEvent(e *event.TlsFreeEvent) error {
 	return nil
 }
 
-func (s *SessionManager) emitHttpRequestEvent(sess *session) {
+func (s *SessionManager) emitHttpRequestEvent(sess *session) error {
 	// Build request event
 	event := event.HttpRequestEvent{
 		EventHeader: event.EventHeader{
@@ -166,11 +170,13 @@ func (s *SessionManager) emitHttpRequestEvent(sess *session) {
 	select {
 	case s.eventCh <- &event:
 	default:
-		logrus.Warn("HTTP event channel is full, dropping HTTP request event")
+		return fmt.Errorf("HTTP event channel is full, dropping HTTP request event")
 	}
+
+	return nil
 }
 
-func (s *SessionManager) emitHttpResponseEvent(sess *session) {
+func (s *SessionManager) emitHttpResponseEvent(sess *session) error {
 	if !sess.request.isComplete {
 		logrus.Debug("HTTP request is not complete when HTTP response event is emitted. Expect missing data.")
 	}
@@ -205,8 +211,10 @@ func (s *SessionManager) emitHttpResponseEvent(sess *session) {
 	select {
 	case s.eventCh <- &event:
 	default:
-		logrus.Warn("HTTP event channel is full, dropping HTTP response event")
+		return fmt.Errorf("HTTP event channel is full, dropping HTTP response event")
 	}
+
+	return nil
 }
 
 func (s *SessionManager) emitSSEEvent(sess *session, eventType string, data []byte) {
